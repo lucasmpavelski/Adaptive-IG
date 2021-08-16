@@ -1,41 +1,70 @@
-#include <functional>
 #include <iostream>
 
-#include <spdlog/spdlog.h>
-#include <docopt/docopt.h>
+#include <paradiseo/eo/eo>
 
-static constexpr auto USAGE =
-  R"(Naval Fate.
+#include "FSPProblemFactory.hpp"
+#include "heuristics.hpp"
+#include "heuristics/all.hpp"
+#include "MHParamsSpecsFactory.hpp"
+#include "MHParamsSpecs.hpp"
 
-    Usage:
-          naval_fate ship new <name>...
-          naval_fate ship <name> move <x> <y> [--speed=<kn>]
-          naval_fate ship shoot <x> <y>
-          naval_fate mine (set|remove) <x> <y> [--moored | --drifting]
-          naval_fate (-h | --help)
-          naval_fate --version
- Options:
-          -h --help     Show this screen.
-          --version     Show version.
-          --speed=<kn>  Speed in knots [default: 10].
-          --moored      Moored (anchored) mine.
-          --drifting    Drifting mine.
-)";
+auto split(const std::string& val) -> std::vector<std::string> {
+  std::vector<std::string> res;
+  std::stringstream ss(val);
+  std::string token;
+  while (std::getline(ss, token, ',')) {
+    res.push_back(token);
+  }
+  return res;
+}
 
-int main(int argc, const char **argv)
-{
-  std::map<std::string, docopt::value> args = docopt::docopt(USAGE,
-    { std::next(argv), std::next(argv, argc) },
-    true,// show help if requested
-    "Naval Fate 2.0");// version string
+auto main(int argc, char* argv[]) -> int {
+  eoParser parser(argc, argv);
 
-  for (auto const &arg : args) {
-    std::cout << arg.first << arg.second << std::endl;
+  std::string data_folder;
+  std::string mh;
+  std::vector<std::string> problem_names;
+  std::vector<std::string> problem_values;
+  long seed = 123;
+
+  data_folder =
+      parser.createParam(data_folder, "data_folder", "specs and instances path")
+          .value();
+  mh = parser.createParam(mh, "mh", "metaheuristic").value();
+  seed = parser.createParam(seed, "seed", "rng seed").value();
+
+  MHParamsSpecsFactory::init(data_folder + "/specs");
+  FSPProblemFactory::init(data_folder);
+  RNG::seed(seed);
+
+  MHParamsSpecs specs = MHParamsSpecsFactory::get(mh);
+  std::unordered_map<std::string, std::string> params;
+  for (const auto& param : specs) {
+    auto argParam = parser.createParam(std::string(), param->name, param->name);
+    if (parser.isItThere(argParam))
+      params[param->name] = argParam.value();
   }
 
+  std::unordered_map<std::string, std::string> problem;
+  for (const auto& pname : FSPProblemFactory::names()) {
+    problem[pname] = parser.createParam(data_folder, pname, pname)
+                .value();
+  }
 
-  //Use the default logger (stdout, multi-threaded, colored)
-  spdlog::info("Hello, {}!", "World");
+  bool printConfig =
+      parser
+          .createParam(false, "--print-config", "print configuration and exit")
+          .value();
+  if (printConfig) {
+    std::cout << "{" << '\n' << "seed: " << seed << '\n' << "problem: {\n";
+    for (const auto& kv : problem)
+      std::cout << kv.first << ": " << kv.second << '\n';
+    std::cout << "mh: " << mh << '\n';
+  }
 
-  fmt::print("Hello, from {}\n", "{fmt}");
+  RunOptions options(parser);
+
+  solveWith(mh, problem, params, options);
+
+  return 0;
 }

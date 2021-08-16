@@ -1,0 +1,23 @@
+Package: AdaptIG
+Type: Package
+Title: Adaptive Iterated Greedy Algorithm
+Version: 1.0
+Date: 2021-08-15
+Author: Lucas Marcondes Pavelski
+Maintainer: Lucas Marcondes Pavelski <lmpavelski@yahoo.com.br>
+Description: Iterated Greedy algorithm with adaptive components for flowshop problems: implementation and experiments data.
+License: GPL (>= 2)
+Depends:
+    Rcpp,
+    irace,
+    dplyr,
+    tidyr,
+    purrr,
+    stringr,
+    future,
+    here,
+    readr,
+    schedulingInstancesGeneratoR,
+    metaOpt
+Imports: Rcpp (>= 1.0.7)
+LinkingTo: Rcpp

@@ -1,52 +1,35 @@
-option(CPP_STARTER_USE_QT "Enable compilation of QT sample" OFF)
-option(CPP_STARTER_USE_FLTK "Enable compilation of FLTK sample" OFF)
-option(CPP_STARTER_USE_GTKMM "Enable compilation of GTKMM sample" OFF)
-option(CPP_STARTER_USE_IMGUI "Enable compilation of ImGui sample" OFF)
-option(CPP_STARTER_USE_NANA "Enable compilation of Nana GUI sample" OFF)
-option(CPP_STARTER_USE_SDL "Enable compilation of SDL sample" OFF)
-
-# sdl
-if(CPP_STARTER_USE_SDL)
-  message("Using SDL2")
-  add_subdirectory(sdl)
-endif()
-
-# qt
-if(CPP_STARTER_USE_QT)
-  message("Using Qt")
-  add_subdirectory(qt)
-endif()
-
-# fltk test
-if(CPP_STARTER_USE_FLTK)
-  message("Using FLTK")
-  add_subdirectory(fltk)
-endif()
-
-# gtkmm test
-if(CPP_STARTER_USE_GTKMM)
-  message("Using gtkmm")
-  add_subdirectory(gtkmm)
-endif()
-
-# imgui example
-if(CPP_STARTER_USE_IMGUI)
-  message("Using Dear ImGui")
-  add_subdirectory(imgui)
-endif()
-
-# Nana
-if(CPP_STARTER_USE_NANA)
-  message("Using Nana")
-  add_subdirectory(nana)
-endif()
-
 # Generic test that uses conan libs
-add_executable(intro main.cpp)
+add_executable(main main.cpp)
+
+set(FSP_SOURCES
+  FSPProblemFactory.cpp
+  MHParamsSpecsFactory.cpp
+  global.cpp
+)
+
+add_library(flowshop_solver_lib STATIC ${FSP_SOURCES})
 target_link_libraries(
-  intro
+  flowshop_solver_lib
   PRIVATE project_options
           project_warnings
-          CONAN_PKG::docopt.cpp
-          CONAN_PKG::fmt
-          CONAN_PKG::spdlog)
+          CONAN_PKG::Eigen3
+          ${PARADISEO_LIBRARIES}
+          pthread
+)
+target_include_directories(
+  flowshop_solver_lib
+  PUBLIC ${CMAKE_SOURCE_DIR}/src 
+          ${CONAN_INCLUDE_DIRS_EIGEN3}
+          ${PARADISEO_INCLUDE_DIR})
+set_property(TARGET flowshop_solver_lib PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+
+message("${PARADISEO_INCLUDE_DIR}")
+
+target_link_libraries(
+  main
+  PRIVATE project_options
+          project_warnings
+          flowshop_solver_lib
+)
+

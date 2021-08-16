@@ -1,0 +1,294 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r setup, message=FALSE, warning=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo=FALSE)
+library(tidyverse)
+library(here)
+source(here("R/read_runs.R"))
+```
+
+```{r load, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+runs <- list(
+  rs_ig_destruction_sizes = read_runs("rs-ig-destruction-sizes"),
+  rs_reward_types = read_runs('best-perturb-fitness'),
+  aos_ig = read_runs('aos-ig'),
+  #aos_tunning = read_runs('aos-tunning'),
+  aos_tunning_race = read_runs('aos-tunning-final-test'),
+  aos_tunning_generarization = read_runs('aos-tunning-generarization'),
+  aos_148 = read_runs('aos-148-final-comparison'),
+  aos_10k_final = read_runs('ig-lsps-aos-tunning-10000evals-final')
+)
+```
+
+
+# Introduction
+
+**Objective:** use Automatic Operator Selection (AOS) to augment metaheuristics for flowshop and compare it to the meta-learning approach.
+
+- The IG destruction size seems to control exploration/exploitation, which is the goal of most AOS strategies;
+- Assumption: there are differences between different IG destruction sizes.
+
+# Assumption #1: is there any difference between different values of destruction sizes?
+
+```{r}
+ig_compare_d_dt <- runs$rs_ig_destruction_sizes %>%
+  filter(type == 'PERM', objective == 'MAKESPAN', name %in% c("IG (d=2)", "IG (d=4)", "IG (d=8)"))
+```
+
+Setup: `r n_distinct(ig_compare_d_dt$instance)` instances, `r n_distinct(ig_compare_d_dt$seed)` replications on permutation flowshop with makespan objective.
+
+```{r}
+compareRpdsCI <- function(runs_dt) {
+  plt_dt <- runs_dt %>%
+    group_by(problem, type, objective, instance, name, seed) %>%
+    filter(fitness == min(fitness))
+  plt_dt <- plt_dt %>%
+    group_by(problem, type, objective, instance) %>%
+    mutate(best_known = min(fitness))
+  plt_dt <- plt_dt %>%
+    group_by(problem, type, objective, instance, name) %>%
+    mutate(rpd = 100 * (fitness - best_known) / best_known)
+  plt_dt <- plt_dt %>%
+    group_by(problem, type, objective, budget, stopping_criterion, name) %>%
+    summarise(
+      mrpd = mean(rpd),
+      ci = sd(rpd) * sqrt(1 / (2 * n()))
+    )
+  plt_dt %>%
+    ggplot(aes(x = name)) +
+    geom_errorbar(aes(y = mrpd, ymin = mrpd - ci, ymax = mrpd + ci, color = paste(problem, type, objective))) + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "bottom") +
+    theme_bw()
+}
+
+```
+
+```{r}
+ig_compare_d_dt %>%
+  compareRpdsCI()
+```
+
+
+- There are significand differecentes between destruction sizes choices;
+- It corroborates with the literature;
+- $d = 2$ is too much exploitation and $d = 8$ is too much exploration (further investigation involving mean local optima distances / solution destruction distances)
+
+# Assumption #2: how does it compare to a random approach?
+
+```{r}
+runs$rs_ig_destruction_sizes %>%
+  filter(type == 'PERM', objective == 'MAKESPAN', name %in% c("IG (d=2)", "IG (d=4)", "IG (d=8)", "IG RND")) %>%
+  compareRpdsCI()
+```
+
+- Random is worse then the average
+- Random might imply too much exploration ($d = 8$ has a bigger impact)
+
+# Can a iteration-based reward be used to inform the best destruction size?
+
+Possible adaptation rewards:
+
+```
+  IteratedGreedy:
+  sol_0 = Init()
+  sol_0' = sol_0
+  sol_0'' = sol_0
+  while (!StoppingCriterion()) :
+    d = OperatorSelection(Reward())
+    sol_t' = Construction(Destruction(sol_t, d))
+    sol_t'' = LocalSearch(sol_t')
+    sol_t+1 = Accept(sol_t'', sol_t)
+    Feedback(sol_t, sol_t', sol_t'', sol_t+1)´
+```
+
+```
+  GG = (sol_t+1 - sol_t ) / sol_t
+  GL = (sol_t'' - sol_t ) / sol_t
+  GG = (sol_t+1 - sol_t') / sol_t'
+  GG = (sol_t'' - sol_t') / sol_t'
+```
+
+To test the rewards, all destruction sizes are applied and the best perturbation (BP) for each reward is chosen:
+
+```{r}
+runs$rs_reward_types %>%
+  filter(type == 'PERM', objective == 'MAKESPAN') %>%
+  compareRpdsCI()
+```
+
+Comparing to the best fixed choice:
+
+```{r}
+best_ig <- runs$rs_ig_destruction_sizes %>%
+  filter(name %in% c("IG (d=4)"))
+best_reward <- runs$rs_reward_types %>%
+  filter(name != "BP GG")
+bind_rows(best_ig, best_reward) %>%
+  filter(type == 'PERM', objective == 'MAKESPAN') %>%
+  compareRpdsCI()
+```
+
+- LL reward is considerably better
+
+# Is there a pattern of destructions sizes over runtime?
+
+```{r}
+folder <- here::here("runs", "best-perturb-destruction-size")
+runtime_ds <- read_csv(
+  file.path(folder, "experiments.csv"),
+  col_types =
+    cols(
+      problem = col_character(),
+      type = col_character(),
+      objective = col_character(),
+      budget = col_character(),
+      stopping_criterion = col_character(),
+      instance = col_character(),
+      name = col_character(),
+      mh = col_character(),
+      params = col_character(),
+      seed = col_double(),
+      output = col_character()
+    )
+  ) %>%
+  mutate(runs = map(output, read_delim,
+                    delim = ' ',
+                    col_names = c('runtime', 'd'),
+                    col_types = cols(
+                      runtime = col_double(),
+                      d = col_double()))) %>%
+  unnest(cols = c(runs))
+
+
+instance_info <- str_match(runtime_ds$instance, '^(.*?)\\_(.*?)\\_(\\d*?)\\_(\\d*?)\\_(\\d*?)\\.dat')
+runtime_ds <- runtime_ds %>%
+  mutate(
+    dist = instance_info[,2],
+    corr = instance_info[,3],
+    no_jobs = as.integer(instance_info[,4]),
+    no_machines = as.integer(instance_info[,5]),
+    inst_n = as.integer(instance_info[,6])
+  )
+```
+
+```{r}
+runtime_ds %>%
+  sample_n(10000) %>%
+  ggplot() +
+  facet_grid(no_machines~no_jobs, scales = 'free') +
+  geom_point(aes(x = runtime, y = d, color = d))
+```
+
+
+```{r}
+runtime_ds %>%
+  ggplot() +
+  facet_grid(no_machines~no_jobs, scales = 'free') +
+  geom_smooth(aes(x = runtime, y = d, color = d), method = 'lm')
+```
+
+
+# Can the LL reward be used to inform the best destruction size?
+
+```{r}
+best_ig <- runs$rs_ig_destruction_sizes %>%
+  filter(name %in% c("IG (d=4)"))
+bind_rows(best_ig, runs$aos_ig) %>%
+  filter(type == 'PERM', objective == 'MAKESPAN') %>%
+  compareRpdsCI()
+```
+
+# TODO
+
+- Parameter tunning for AOS strategies
+- LinUCB on test instances
+- Measure the effect when the number of local search steps is 1 or 0
+
+
+```{r}
+runs$aos_tunning %>%
+  filter(str_starts(name, 'TS')) %>%
+  compareRpdsCI()
+```
+
+
+```{r}
+runs$aos_tunning %>%
+  filter(str_starts(name, 'FRRMAB')) %>%
+  compareRpdsCI() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+```{r}
+runs$aos_tunning %>%
+  filter(str_starts(name, 'PM')) %>%
+  compareRpdsCI() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+runs$aos_tunning %>%
+  filter(str_starts(name, 'LIN')) %>%
+  compareRpdsCI() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+```{r}
+tunned <- c(
+  'TS-reward1',
+  'FRRMAB-rew1-WindowSize100-Scale0.1-Decay0.9',
+  'PM-rew1-rewardTypeextabs -alpha0.2-pmin0.1',
+  'LINUCB-rew3-Alpha0.1'
+)
+best_ig <- runs$rs_ig_destruction_sizes %>%
+  filter(name %in% c("IG (d=4)", "IG RND"))
+best_aos <- runs$aos_tunning %>%
+  filter(name %in% tunned)
+bind_rows(best_ig, best_aos) %>%
+  filter(type == 'PERM', objective == 'MAKESPAN') %>%
+  compareRpdsCI() +
+  coord_flip()
+
+```
+
+```{r}
+best_ig <- runs$rs_ig_destruction_sizes %>%
+  filter(name %in% c("IG (d=4)")) ##, "IG RND"))
+best_aos <- runs$aos_tunning_race 
+bind_rows(best_ig, best_aos) %>%
+  filter(type == 'PERM', objective == 'MAKESPAN', no_jobs >= 50, no_machines >= 10) %>%
+  compareRpdsCI() +
+  coord_flip()
+```
+
+
+```{r}
+best_ig <- runs$rs_ig_destruction_sizes %>%
+  filter(name %in% c("IG (d=4)", "IG RND"))
+bind_rows(best_ig, runs$aos_148) %>%
+  filter(type == 'PERM', objective == 'MAKESPAN', no_jobs >= 50, no_machines >= 10) %>%
+  compareRpdsCI() +
+  coord_flip()
+```
+
+```{r}
+runs$aos_tunning_generarization %>%
+  compareRpdsCI() +
+  coord_flip()
+```
+
+```{r}
+best_ig <- runs$rs_ig_destruction_sizes %>%
+  filter(name %in% c("IG (d=4)", "IG RND"))
+bind_rows(best_ig, runs$aos_10k_final) %>%
+  filter(type == 'PERM', objective == 'MAKESPAN', no_jobs >= 50, no_machines >= 10) %>%
+  compareRpdsCI() +
+  coord_flip()
+```

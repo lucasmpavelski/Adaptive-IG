@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+_install/
+build/
+.cache/
+**/*_cache/latex**
+*.o
+*.so
